@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Admin/Admin.csproj" Id="bc6ca3eb-b264-45c4-8c04-8e1b026e9b6c" />
+  <Project Path="Agent/Agent.csproj" Id="b812c0c6-fedd-4686-8fa9-4628c4cf113e" />
+  <Project Path="Shared/Shared.csproj" />
+</Solution>

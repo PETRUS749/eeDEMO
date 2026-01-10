@@ -1,0 +1,315 @@
+﻿@page "/telemetry"
+
+@using System.Text.Json
+@using Admin.Components
+@using Shared
+
+@inject eeCloudClient ee
+
+
+<PageTitle>Telemetry</PageTitle>
+
+<h3>Telemetry</h3>
+<p class="text-muted">View recent telemetry points for a device.</p>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-5">
+                <label class="form-label">Device</label>
+                <select class="form-select" value="@_selectedDeviceId" @onchange="@((value) => OnDeviceChanged(value))">
+                    <option value="">-- select device --</option>
+                    @foreach (var d in devices)
+                    {
+                        <option value="@d.DeviceId">@d.DeviceId (@d.Name)</option>
+                    }
+                </select>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <label class="form-label">Limit</label>
+                <input class="form-control" type="number" min="10" max="1000" step="10" @bind="_limit" />
+            </div>
+
+            <div class="col-6 col-md-4 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="Load" disabled="@string.IsNullOrWhiteSpace(_selectedDeviceId)">
+                    Load
+                </button>
+                <button class="btn btn-outline-secondary" @onclick="ToggleAutoRefresh" disabled="@string.IsNullOrWhiteSpace(_selectedDeviceId)">
+                    @_autoRefreshLabel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_loading)
+{
+    <p>Loading...</p>
+}
+else if (_rows is not null && _rows.Count > 0)
+{
+    if (_rows is not null && _rows.Count > 1)
+    {
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Metric</label>
+                        <select class="form-select" @bind="_metricKey">
+                            @foreach (var k in _numericMetricKeys)
+                            {
+                                <option value="@k">@k</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-12 col-md-8 text-muted">
+                        Tip: hover a point to see the tooltip (timestamp + value).
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <TelemetryLineChart Data="_rows" MetricKey="@_metricKey" Title="@($"{_selectedDeviceId} — {_metricKey}")" />
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th style="white-space:nowrap;">Timestamp (UTC)</th>
+                            <th style="white-space:nowrap;">DeviceId</th>
+                            <th>Metrics</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in _rows)
+                        {
+                            <tr>
+                                <td style="white-space:nowrap;">@t.TimestampUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                <td style="white-space:nowrap;">@t.DeviceId</td>
+                                <td>
+                                    <pre class="mb-0" style="max-height:140px; overflow:auto;">@JsonSerializer.Serialize(t.Metrics, _jsonOpts)</pre>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_selectedDeviceId))
+{
+    <p class="text-muted">No telemetry yet for this device.</p>
+}
+
+
+
+@code {
+    private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
+
+    private List<Device> devices = [];
+    private string _selectedDeviceId = "";
+    private int _limit = 100;
+
+    private List<TelemetryPoint>? _rows;
+    private bool _loading;
+    private string _error = "";
+
+    private bool _autoRefresh;
+    private string _autoRefreshLabel => _autoRefresh ? "Auto refresh: ON" : "Auto refresh: OFF";
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    private List<string> _numericMetricKeys = new();
+    private string _metricKey = "";
+
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        Memory? mem = await ee.Memory("devices").ReadAllAsync();
+
+        if (mem?.result == true)
+        {
+            foreach (var area in mem.area)
+            {
+                Device? device = JsonSerializer.Deserialize<Device>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                if (device == null)
+                    continue;
+
+                device.id = area.address;
+                device.CreatedAtUtc = area.date;
+
+                if (devices == null)
+                    devices = [];
+
+                devices.Add(device);
+            }
+        }
+    }
+
+
+
+    private async Task OnDeviceChanged(ChangeEventArgs value)
+    {
+        _rows = null;
+        _error = "";
+        _selectedDeviceId = value.Value?.ToString() ?? "";
+
+        await Task.CompletedTask;
+    }
+
+
+
+    private async Task Load()
+    {
+        _error = "";
+        if (string.IsNullOrWhiteSpace(_selectedDeviceId))
+            return;
+
+        _loading = true;
+        try
+        {
+            Memory? telemetryMem = await ee.Memory("telemetry").ReadAllAsync(_selectedDeviceId, Order.DESC, false, 0, _limit);
+
+            if (telemetryMem?.result == false)
+                _error = "Error loading telemetry.";
+            else
+            {
+                var data = new List<TelemetryPoint>();
+
+                foreach (var area in telemetryMem.area)
+                {
+                    TelemetryPoint? tp = JsonSerializer.Deserialize<TelemetryPoint>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    
+                    if (tp != null)
+                        data.Add(tp);
+                }
+
+                _rows = data;
+
+                _numericMetricKeys = GetNumericMetricKeys(_rows);
+
+                if (string.IsNullOrWhiteSpace(_metricKey))
+                    _metricKey = _numericMetricKeys.FirstOrDefault() ?? "";
+
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+
+    private void ToggleAutoRefresh()
+    {
+        _autoRefresh = !_autoRefresh;
+
+        if (_autoRefresh)
+        {
+            _cts = new CancellationTokenSource();
+            _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (await _timer.WaitForNextTickAsync(_cts.Token))
+                    {
+                        await InvokeAsync(Load);
+                        await InvokeAsync(StateHasChanged);
+                    }
+                }
+                catch { /* ignore */ }
+            });
+        }
+        else
+        {
+            _cts?.Cancel();
+            _timer?.Dispose();
+            _timer = null;
+        }
+    }
+
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+    }
+
+
+
+    private static List<string> GetNumericMetricKeys(IEnumerable<TelemetryPoint> rows)
+    {
+        // prendi un po’ di sample e trova chiavi numeriche
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var r in rows.Take(30))
+        {
+            foreach (var k in r.Metrics.Keys)
+                keys.Add(k);
+        }
+
+        // filtra: deve essere numerica almeno una volta
+        bool IsNumericOnce(string key)
+        {
+            foreach (var r in rows.Take(50))
+            {
+                if (TryGetDouble(r.Metrics, key, out _))
+                    return true;
+            }
+            return false;
+        }
+
+        return keys.Where(IsNumericOnce).OrderBy(x => x).ToList();
+    }
+
+
+    private static bool TryGetDouble(Dictionary<string, object> metrics, string key, out double value)
+    {
+        // stessa logica del componente (duplicata per semplicità)
+        value = 0;
+        if (!metrics.TryGetValue(key, out var obj) || obj is null) return false;
+
+        switch (obj)
+        {
+            case double d: value = d; return true;
+            case float f: value = f; return true;
+            case int i: value = i; return true;
+            case long l: value = l; return true;
+            case decimal m: value = (double)m; return true;
+            case string s when double.TryParse(s, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed):
+                value = parsed; return true;
+            default:
+                if (obj is System.Text.Json.JsonElement je)
+                {
+                    if (je.ValueKind == System.Text.Json.JsonValueKind.Number && je.TryGetDouble(out var jd))
+                    { value = jd; return true; }
+
+                    if (je.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        double.TryParse(je.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var js))
+                    { value = js; return true; }
+                }
+                return false;
+        }
+    }
+}

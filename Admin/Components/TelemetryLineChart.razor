@@ -1,0 +1,181 @@
+﻿@using Shared
+@using System.Globalization
+
+
+@if (Data is null || Data.Count < 2)
+{
+    <div class="text-muted">Not enough data to draw a chart.</div>
+}
+else if (string.IsNullOrWhiteSpace(MetricKey))
+{
+    <div class="text-muted">Select a metric to draw.</div>
+}
+else
+{
+    <svg width="@Width" height="@Height" viewBox="0 0 @Width @Height" role="img" aria-label="Telemetry chart"
+         style="width:100%; max-width:@WidthPx; height:auto; border-radius:12px; background:white; border:1px solid #e5e7eb;">
+        <!-- Title -->
+        <text x="@Padding" y="18" font-size="12" fill="#111827" font-weight="600">@Title</text>
+
+        @* Grid *@
+        @for (int i = 0; i <= GridLines; i++)
+        {
+            var y = PlotTop + (PlotHeight * i / (double)GridLines);
+            <line x1="@PlotLeft" y1="@y" x2="@PlotRight" y2="@y" stroke="#eef2f7" stroke-width="1" />
+        }
+
+        @* Axis labels (min/max) *@
+        <text x="@PlotLeft" y="@(@PlotBottom + 18)" font-size="10" fill="#6b7280">@MinLabel</text>
+        <text x="@PlotLeft" y="@(@PlotTop + 2)" font-size="10" fill="#6b7280">@MaxLabel</text>
+
+        @* Polyline *@
+        <polyline fill="none" stroke="#14B8FF" stroke-width="2.5"
+                  points="@PolylinePoints" />
+
+        @* Points (optional) *@
+        @if (ShowPoints)
+        {
+            @foreach (var p in PointList)
+            {
+                <circle cx="@p.x.ToString("0.##", CultureInfo.InvariantCulture)"
+                        cy="@p.y.ToString("0.##", CultureInfo.InvariantCulture)"
+                        r="3.2"
+                        fill="#14B8FF">
+                    <title>@p.tooltip</title>
+                </circle>
+            }
+        }
+
+        @* Last value badge *@
+        <rect x="@(@PlotRight - 90)" y="@(@PlotTop + 8)" width="82" height="22" rx="8" fill="#f3f4f6" />
+        <text x="@(@PlotRight - 49)" y="@(@PlotTop + 23)" text-anchor="middle" font-size="10" fill="#111827">
+            @LastValueLabel
+        </text>
+    </svg>
+}
+
+
+
+@code {
+    [Parameter] public IReadOnlyList<TelemetryPoint>? Data { get; set; }
+    [Parameter] public string MetricKey { get; set; } = "";
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public int Width { get; set; } = 920;
+    [Parameter] public int Height { get; set; } = 260;
+    [Parameter] public int Padding { get; set; } = 18;
+    [Parameter] public int GridLines { get; set; } = 4;
+    [Parameter] public bool ShowPoints { get; set; } = true;
+
+    private string WidthPx => $"{Width}px";
+
+    private double PlotLeft => Padding;
+    private double PlotRight => Width - Padding;
+    private double PlotTop => 30; // spazio titolo
+    private double PlotBottom => Height - Padding;
+    private double PlotWidth => PlotRight - PlotLeft;
+    private double PlotHeight => PlotBottom - PlotTop;
+
+    private string PolylinePoints = "";
+    private List<(double x, double y, string tooltip)> PointList = new();
+
+    private double MinY;
+    private double MaxY;
+
+    private string MinLabel => $"min: {MinY:0.###}";
+    private string MaxLabel => $"max: {MaxY:0.###}";
+    private string LastValueLabel = "";
+
+    protected override void OnParametersSet()
+    {
+        if (Data is null || Data.Count < 2 || string.IsNullOrWhiteSpace(MetricKey))
+            return;
+
+        // Per il grafico serve ordine cronologico
+        var ordered = Data.OrderBy(d => d.TimestampUtc).ToList();
+
+        // Estrai valori numerici della metrica
+        var values = new List<(DateTime ts, double v)>();
+        foreach (var t in ordered)
+        {
+            if (TryGetDouble(t.Metrics, MetricKey, out var v))
+                values.Add((t.TimestampUtc, v));
+        }
+
+        if (values.Count < 2)
+        {
+            PolylinePoints = "";
+            PointList.Clear();
+            return;
+        }
+
+        MinY = values.Min(x => x.v);
+        MaxY = values.Max(x => x.v);
+
+        // evita divisione per zero
+        if (Math.Abs(MaxY - MinY) < 0.0000001)
+        {
+            MaxY = MinY + 1.0;
+        }
+
+        var title = Title;
+        if (string.IsNullOrWhiteSpace(title))
+            title = $"{MetricKey} over time";
+
+        Title = title;
+
+        // costruiamo punti
+        var sb = new System.Text.StringBuilder();
+        PointList.Clear();
+
+        for (int i = 0; i < values.Count; i++)
+        {
+            var xNorm = (values.Count == 1) ? 0 : i / (double)(values.Count - 1);
+            var x = PlotLeft + xNorm * PlotWidth;
+
+            var yNorm = (values[i].v - MinY) / (MaxY - MinY); // 0..1
+            var y = PlotBottom - yNorm * PlotHeight;
+
+            if (i > 0) sb.Append(' ');
+            sb.Append($"{x.ToString("0.##", CultureInfo.InvariantCulture)},{y.ToString("0.##", CultureInfo.InvariantCulture)}");
+
+            var tooltip = $"{values[i].ts:HH:mm:ss}  {MetricKey}={values[i].v:0.###}";
+            PointList.Add((x, y, tooltip));
+        }
+
+        PolylinePoints = sb.ToString();
+        var last = values[^1].v;
+        LastValueLabel = $"last: {last:0.###}";
+    }
+
+    private static bool TryGetDouble(Dictionary<string, object> metrics, string key, out double value)
+    {
+        value = 0;
+
+        if (!metrics.TryGetValue(key, out var obj) || obj is null)
+            return false;
+
+        switch (obj)
+        {
+            case double d: value = d; return true;
+            case float f: value = f; return true;
+            case int i: value = i; return true;
+            case long l: value = l; return true;
+            case decimal m: value = (double)m; return true;
+            case string s when double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed):
+                value = parsed; return true;
+            default:
+                // Caso tipico: JsonElement quando la Dictionary viene da deserializzazione
+                if (obj is System.Text.Json.JsonElement je)
+                {
+                    if (je.ValueKind == System.Text.Json.JsonValueKind.Number && je.TryGetDouble(out var jd))
+                    { value = jd; return true; }
+
+                    if (je.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        double.TryParse(je.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var js))
+                    { value = js; return true; }
+                }
+                return false;
+        }
+    }
+}

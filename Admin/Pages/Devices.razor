@@ -1,0 +1,72 @@
+﻿@page "/devices"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+
+
+<h3>Devices</h3>
+
+@if (devices is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>DeviceId</th>
+                <th>Name</th>
+                <th>Group</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var d in devices)
+            {
+                <tr>
+                    <td>@d.DeviceId</td>
+                    <td>@d.Name</td>
+                    <td>@d.Group</td>
+                    <td><a href="@($"/devices/{d.DeviceId}")">Open</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <hr />
+    <a class="btn btn-primary" href="/config/publish">Publish Config</a>
+}
+
+
+
+@code {
+    private List<Device>? devices;
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        Memory? mem = await ee.Memory("devices").ReadAllAsync();
+
+        if (mem?.result == true)
+        {
+            foreach (var area in mem.area)
+            {
+                Device? device = JsonSerializer.Deserialize<Device>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                if (device == null)
+                    continue;
+
+                device.id = area.address;
+                device.CreatedAtUtc = area.date;
+
+                if (devices == null)
+                    devices = [];
+
+                devices.Add(device);
+            }
+        }
+    }
+}

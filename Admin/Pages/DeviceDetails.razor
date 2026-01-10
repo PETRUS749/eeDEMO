@@ -1,0 +1,37 @@
+﻿@page "/devices/{DeviceId}"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+
+
+<h3>Device: @DeviceId</h3>
+
+@if (state is null)
+{
+    <p>No reported state yet.</p>
+}
+else
+{
+    <p><b>Last seen (UTC):</b> @state.LastSeenUtc</p>
+    <p><b>Applied config version:</b> @state.AppliedConfigVersion</p>
+
+    <h5>Runtime</h5>
+    <pre>@System.Text.Json.JsonSerializer.Serialize(state.Runtime)</pre>
+}
+
+
+@code {
+    [Parameter] public string DeviceId { get; set; } = "";
+
+    private ReportedState? state;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Memory? mem = await ee.Memory("states").ReadByIndexAsync(DeviceId);
+
+        if (mem?.result == true)
+            state = JsonSerializer.Deserialize<ReportedState>(mem.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+}

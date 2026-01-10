@@ -1,0 +1,102 @@
+﻿@page "/config/publish"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+
+
+<h3>Publish Desired Config</h3>
+
+<div class="row">
+    <div class="col-md-4">
+        <label>Target</label>
+        <select class="form-select" @bind="targetType">
+            <option value="device">Device</option>
+            <option value="group">Group</option>
+        </select>
+
+        <label class="mt-2">Target ID</label>
+        <input class="form-control" @bind="targetId" placeholder="e.g. lab or LP-001" />
+
+        <label class="mt-2">Version</label>
+        <input class="form-control" type="number" @bind="version" />
+
+        <button class="btn btn-primary mt-3" @onclick="Publish">Publish</button>
+        @if (!string.IsNullOrWhiteSpace(msg))
+        {
+            <p class="mt-2">@msg</p>
+        }
+    </div>
+
+    <div class="col-md-8">
+        <label>Config JSON</label>
+        <textarea class="form-control" rows="14" @bind="json"></textarea>
+        <small class="text-muted">Example: {"samplingMs":1000,"logLevel":"Information","features":{"mqttEnabled":true}}</small>
+    </div>
+</div>
+
+
+@code {
+    private string targetType = "device";
+    private string targetId = "";
+    private long version = 1;
+    private string msg = "";
+
+    private string json = """
+{
+  "samplingMs": 1000,
+  "logLevel": "Information",
+  "features": {
+    "mqttEnabled": true
+  }
+}
+""";
+
+
+    private async Task Publish()
+    {
+        try
+        {
+            var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json)
+                       ?? throw new Exception("Invalid JSON.");
+
+            var cfg = new DesiredConfig(
+                TargetType: targetType,
+                TargetId: targetId,
+                Version: version,
+                Config: dict,
+                PublishedAtUtc: DateTime.UtcNow
+            );
+
+            if (targetType == "device")
+            {
+                Memory? configMem = await ee.Memory("configurations").ReadByIndexAsync(targetId);
+
+                if (configMem?.result == true)
+                {
+                    if ((await ee.Memory("configurations").UpdateAsync(configMem.area[0].address, cfg))?.result == true)
+                        msg = "Published ✅";
+                    else
+                        msg = "Error ❌";
+                }
+                else
+                {
+                    if ((await ee.Memory("configurations").WriteAsync(Guid.NewGuid().ToString(), targetId, cfg))?.result == true)
+                        msg = "Published ✅";
+                    else
+                        msg = "Error ❌";
+                }
+            }
+            else
+            {
+                // Read all Group Devices
+                // Update all Group Devices Configurations
+            }
+        }
+        catch (Exception ex)
+        {
+            msg = $"Error: {ex.Message}";
+        }
+    }
+}

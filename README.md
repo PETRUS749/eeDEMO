@@ -151,7 +151,7 @@ Hover points to see tooltips (timestamp + value).
 
 ## License
 
-MIT (recommended for demo repos). Add a `LICENSE` file in the repo root.
+MIT
 
 ---
 

@@ -41,7 +41,7 @@ This repo is intended to be simple to run, easy to read, and easy to extend (e.g
 ## Prerequisites
 
 - .NET 10 SDK
-- An eeCLOUD account + **Application** + **API key**
+- An eeCLOUD account + **Application** + **API key**, visit: https://eecloud.io
 - LattePanda IOTA running Windows or Linux (or any x86 machine for local testing)
 
 ---

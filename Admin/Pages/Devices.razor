@@ -1,0 +1,123 @@
+@page "/devices"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+
+
+<h3>Devices</h3>
+
+@if (devices is null)
+{
+    <p>Loading...</p>
+}
+else if (devices.Count == 0)
+{
+    <p class="text-muted">No devices registered yet.</p>
+}
+else
+{
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>DeviceId</th>
+                <th>Name</th>
+                <th>Group</th>
+                <th>Last Seen (UTC)</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var d in devices)
+            {
+                var state = _states.GetValueOrDefault(d.DeviceId);
+                var isOnline = state is not null && (DateTime.UtcNow - state.LastSeenUtc).TotalSeconds < 30;
+                var lastSeen = state is not null ? RelativeTime(state.LastSeenUtc) : "—";
+
+                <tr>
+                    <td>
+                        @if (isOnline)
+                        {
+                            <span class="badge bg-success">Online</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">Offline</span>
+                        }
+                    </td>
+                    <td><code>@d.DeviceId</code></td>
+                    <td>@d.Name</td>
+                    <td><span class="badge bg-light text-dark border">@d.Group</span></td>
+                    <td class="text-muted" style="font-size:0.9em;">@lastSeen</td>
+                    <td>
+                        <a class="btn btn-sm btn-outline-primary" href="@($"/devices/{d.DeviceId}")">Details</a>
+                        <a class="btn btn-sm btn-outline-secondary ms-1" href="@($"/telemetry?deviceId={d.DeviceId}")">Telemetry</a>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <hr />
+    <a class="btn btn-primary" href="/config/publish">Publish Config</a>
+}
+
+
+
+@code {
+    private List<Device>? devices;
+    private Dictionary<string, ReportedState> _states = new();
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        var devTask   = ee.Memory("devices").ReadAllAsync();
+        var stateTask = ee.Memory("states").ReadAllAsync();
+
+        await Task.WhenAll(devTask, stateTask);
+
+        var devMem   = devTask.Result;
+        var stateMem = stateTask.Result;
+
+        // parse devices
+        if (devMem?.result == true)
+        {
+            devices = [];
+            foreach (var area in devMem.area)
+            {
+                var device = JsonSerializer.Deserialize<Device>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (device is null) continue;
+                device.id = area.address;
+                device.CreatedAtUtc = area.date;
+                devices.Add(device);
+            }
+        }
+        else
+        {
+            devices = [];
+        }
+
+        // parse states
+        if (stateMem?.result == true)
+        {
+            foreach (var area in stateMem.area)
+            {
+                var state = JsonSerializer.Deserialize<ReportedState>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (state is not null)
+                    _states[state.DeviceId] = state;
+            }
+        }
+    }
+
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60)  return $"{(int)delta.TotalSeconds}s ago";
+        if (delta.TotalMinutes < 60)  return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24)    return $"{(int)delta.TotalHours}h ago";
+        return utc.ToString("yyyy-MM-dd HH:mm");
+    }
+}

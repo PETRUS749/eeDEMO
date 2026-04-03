@@ -1,0 +1,143 @@
+@page "/devices/{DeviceId}"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/devices">Devices</a></li>
+        <li class="breadcrumb-item active">@DeviceId</li>
+    </ol>
+</nav>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    <h3 class="mb-0">@DeviceId</h3>
+    @if (_isOnline)
+    {
+        <span class="badge bg-success fs-6">Online</span>
+    }
+    else if (state is not null)
+    {
+        <span class="badge bg-secondary fs-6">Offline</span>
+    }
+</div>
+
+@if (_loading)
+{
+    <p>Loading...</p>
+}
+else if (state is null)
+{
+    <div class="alert alert-warning">No reported state yet. Is the Agent running?</div>
+}
+else
+{
+    <div class="row g-3 mb-4">
+
+        <div class="col-6 col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Last Seen</div>
+                    <div class="fw-semibold">@RelativeTime(state.LastSeenUtc)</div>
+                    <div class="text-muted" style="font-size:0.75em;">@state.LastSeenUtc.ToString("HH:mm:ss") UTC</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Config Version</div>
+                    <div class="fw-semibold fs-5">v@(state.AppliedConfigVersion)</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Uptime</div>
+                    <div class="fw-semibold">@FormatUptime(state.Runtime)</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-6 col-md-3">
+            <div class="card text-center h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Sampling</div>
+                    <div class="fw-semibold">@GetRuntimeValue(state.Runtime, "samplingMs") ms</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Runtime</div>
+        <div class="card-body">
+            <table class="table table-sm mb-0">
+                <tbody>
+                    @foreach (var kv in state.Runtime)
+                    {
+                        <tr>
+                            <td class="text-muted" style="width:40%">@kv.Key</td>
+                            <td><code>@kv.Value</code></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2">
+        <a class="btn btn-primary" href="/telemetry?deviceId=@DeviceId">View Telemetry</a>
+        <a class="btn btn-outline-secondary" href="/config/publish?targetId=@DeviceId">Publish Config</a>
+    </div>
+}
+
+
+
+@code {
+    [Parameter] public string DeviceId { get; set; } = "";
+
+    private ReportedState? state;
+    private bool _loading = true;
+    private bool _isOnline => state is not null && (DateTime.UtcNow - state.LastSeenUtc).TotalSeconds < 30;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        Memory? mem = await ee.Memory("states").ReadByIndexAsync(DeviceId);
+
+        if (mem?.result == true)
+            state = JsonSerializer.Deserialize<ReportedState>(mem.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        _loading = false;
+    }
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60)  return $"{(int)delta.TotalSeconds}s ago";
+        if (delta.TotalMinutes < 60)  return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24)    return $"{(int)delta.TotalHours}h ago";
+        return utc.ToString("yyyy-MM-dd HH:mm");
+    }
+
+    private static string FormatUptime(Dictionary<string, object> runtime)
+    {
+        if (!runtime.TryGetValue("uptimeSec", out var raw)) return "—";
+        if (!long.TryParse(raw?.ToString(), out var sec)) return "—";
+        var ts = TimeSpan.FromSeconds(sec);
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+        if (ts.TotalMinutes >= 1) return $"{ts.Minutes}m {ts.Seconds}s";
+        return $"{ts.Seconds}s";
+    }
+
+    private static string GetRuntimeValue(Dictionary<string, object> runtime, string key)
+        => runtime.TryGetValue(key, out var v) ? v?.ToString() ?? "—" : "—";
+}

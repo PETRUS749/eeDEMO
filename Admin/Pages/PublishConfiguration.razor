@@ -1,0 +1,212 @@
+@page "/config/publish"
+
+@using Shared
+@using System.Text.Json
+
+@inject eeCloudClient ee
+@inject NavigationManager Nav
+
+
+<h3>Publish Desired Config</h3>
+
+<div class="row g-3">
+    <div class="col-md-4">
+
+        <label class="form-label">Target</label>
+        <select class="form-select" @bind="targetType">
+            <option value="device">Device</option>
+            <option value="group">Group</option>
+        </select>
+
+        <label class="form-label mt-2">Target ID</label>
+        <input class="form-control" @bind="targetId" placeholder="@(targetType == "device" ? "e.g. LP-001" : "e.g. lab")" />
+
+        <label class="form-label mt-2">Version</label>
+        <input class="form-control" type="number" @bind="version" />
+
+        @if (_versionWarning)
+        {
+            <div class="alert alert-warning mt-2 py-2 small">
+                The Agent only applies configs with a version <strong>strictly greater</strong> than the current applied version.
+                Make sure to increment the version number.
+            </div>
+        }
+
+        <button class="btn btn-primary mt-3" @onclick="Publish" disabled="@_publishing">
+            @(_publishing ? "Publishing…" : "Publish")
+        </button>
+
+        @if (!string.IsNullOrWhiteSpace(msg))
+        {
+            <div class="alert @_msgClass mt-2 py-2">@msg</div>
+        }
+
+    </div>
+
+    <div class="col-md-8">
+        <label class="form-label">Config JSON</label>
+        <textarea class="form-control font-monospace" rows="14" @bind="json"></textarea>
+        <small class="text-muted">Example: {"samplingMs":500,"logLevel":"Debug"}</small>
+    </div>
+</div>
+
+
+
+@code {
+    [SupplyParameterFromQuery] public string? targetId { get; set; } = "";
+
+    private string targetType = "device";
+    private long version = 1;
+    private string msg = "";
+    private string _msgClass = "";
+    private bool _publishing = false;
+    private bool _versionWarning = false;
+
+    private string json = """
+{
+  "samplingMs": 1000,
+  "logLevel": "Information"
+}
+""";
+
+    protected override void OnInitialized()
+    {
+        // targetId puo' arrivare dalla query string (es. da DeviceDetails)
+        targetId ??= "";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        if (string.IsNullOrWhiteSpace(targetId)) return;
+
+        // Pre-carica la versione corrente cosi' l'utente sa da dove partire
+        await LoadCurrentVersion();
+        StateHasChanged();
+    }
+
+    private async Task LoadCurrentVersion()
+    {
+        try
+        {
+            Memory? mem = await ee.Memory("configurations").ReadByIndexAsync(targetId!);
+            if (mem?.result == true)
+            {
+                var cfg = JsonSerializer.Deserialize<DesiredConfig>(mem.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (cfg is not null)
+                {
+                    version = cfg.Version + 1; // suggerisci la prossima versione
+                    json = JsonSerializer.Serialize(cfg.Config, new JsonSerializerOptions { WriteIndented = true });
+                }
+            }
+        }
+        catch { }
+    }
+
+    private async Task Publish()
+    {
+        msg = "";
+        _versionWarning = false;
+        _publishing = true;
+
+        try
+        {
+            var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json)
+                       ?? throw new Exception("Invalid JSON.");
+
+            var cfg = new DesiredConfig(
+                TargetType: targetType,
+                TargetId: targetId!,
+                Version: version,
+                Config: dict,
+                PublishedAtUtc: DateTime.UtcNow
+            );
+
+            if (targetType == "device")
+            {
+                await PublishToDevice(targetId!, cfg);
+            }
+            else
+            {
+                await PublishToGroup(targetId!, cfg, dict);
+            }
+        }
+        catch (Exception ex)
+        {
+            msg = $"Error: {ex.Message}";
+            _msgClass = "alert-danger";
+        }
+        finally
+        {
+            _publishing = false;
+        }
+    }
+
+    private async Task PublishToDevice(string deviceId, DesiredConfig cfg)
+    {
+        // controlla versione corrente per mostrare warning
+        Memory? existing = await ee.Memory("configurations").ReadByIndexAsync(deviceId);
+
+        if (existing?.result == true)
+        {
+            var current = JsonSerializer.Deserialize<DesiredConfig>(existing.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (current is not null && cfg.Version <= current.Version)
+            {
+                _versionWarning = true;
+            }
+
+            var result = await ee.Memory("configurations").UpdateAsync(existing.area[0].address, cfg);
+            msg = result?.result == true ? $"Published v{cfg.Version} to device '{deviceId}'" : "Publish failed.";
+            _msgClass = result?.result == true ? "alert-success" : "alert-danger";
+        }
+        else
+        {
+            var result = await ee.Memory("configurations").WriteAsync(Guid.NewGuid().ToString(), deviceId, cfg);
+            msg = result?.result == true ? $"Published v{cfg.Version} to device '{deviceId}'" : "Publish failed.";
+            _msgClass = result?.result == true ? "alert-success" : "alert-danger";
+        }
+    }
+
+    private async Task PublishToGroup(string group, DesiredConfig cfg, Dictionary<string, object> dict)
+    {
+        // Leggi tutti i device del gruppo
+        Memory? devMem = await ee.Memory("devices").ReadAllAsync();
+        if (devMem?.result != true)
+        {
+            msg = "Could not load device list.";
+            _msgClass = "alert-danger";
+            return;
+        }
+
+        var groupDevices = devMem.area
+            .Select(a => JsonSerializer.Deserialize<Device>(a.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }))
+            .Where(d => d is not null && string.Equals(d.Group, group, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (groupDevices.Count == 0)
+        {
+            msg = $"No devices found in group '{group}'.";
+            _msgClass = "alert-warning";
+            return;
+        }
+
+        int ok = 0, fail = 0;
+
+        foreach (var device in groupDevices)
+        {
+            var deviceCfg = cfg with { TargetType = "device", TargetId = device!.DeviceId };
+            Memory? existing = await ee.Memory("configurations").ReadByIndexAsync(device.DeviceId);
+
+            bool success;
+            if (existing?.result == true)
+                success = (await ee.Memory("configurations").UpdateAsync(existing.area[0].address, deviceCfg))?.result == true;
+            else
+                success = (await ee.Memory("configurations").WriteAsync(Guid.NewGuid().ToString(), device.DeviceId, deviceCfg))?.result == true;
+
+            if (success) ok++; else fail++;
+        }
+
+        msg = $"Published v{cfg.Version} to {ok}/{groupDevices.Count} devices in group '{group}'.";
+        _msgClass = fail == 0 ? "alert-success" : "alert-warning";
+    }
+}

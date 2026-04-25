@@ -149,6 +149,18 @@ Hover points to see tooltips (timestamp + value).
 
 ---
 
+## ⚠️ Security note
+
+Do not commit your eeCLOUD API key to GitHub.
+
+Use:
+- .NET User Secrets (recommended)
+- Environment variables
+
+If a key is exposed, revoke it immediately and generate a new one.
+
+---
+
 ## License
 
 MIT

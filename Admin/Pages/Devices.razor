@@ -82,12 +82,12 @@ else
         var stateMem = stateTask.Result;
 
         // parse devices
-        if (devMem?.result == true)
+        if (HasRows(devMem))
         {
             devices = [];
-            foreach (var area in devMem.area)
+            foreach (var area in devMem!.area!)
             {
-                var device = JsonSerializer.Deserialize<Device>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var device = JsonSerializer.Deserialize<Device>(area!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (device is null) continue;
                 device.id = area.address;
                 device.CreatedAtUtc = area.date;
@@ -100,11 +100,11 @@ else
         }
 
         // parse states
-        if (stateMem?.result == true)
+        if (HasRows(stateMem))
         {
-            foreach (var area in stateMem.area)
+            foreach (var area in stateMem!.area!)
             {
-                var state = JsonSerializer.Deserialize<ReportedState>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var state = JsonSerializer.Deserialize<ReportedState>(area!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (state is not null)
                     _states[state.DeviceId] = state;
             }
@@ -120,4 +120,7 @@ else
         if (delta.TotalHours < 24)    return $"{(int)delta.TotalHours}h ago";
         return utc.ToString("yyyy-MM-dd HH:mm");
     }
+
+    private static bool HasRows(Memory? mem)
+        => mem?.result == true && mem.area is not null && mem.area.Any();
 }

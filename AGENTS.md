@@ -16,7 +16,7 @@ The goal is clarity, simplicity, and reproducibility — not over-engineering.
 
 The solution is composed of three main projects:
 
-/src
+/
   ├── Shared   → shared models and contracts
   ├── Agent    → device-side logic (runs on LattePanda IOTA)
   └── Admin    → Blazor Server dashboard
@@ -34,8 +34,8 @@ The solution is composed of three main projects:
 Main logical memories used:
 
 - devices
-- desiredConfig
-- reportedState
+- configurations
+- states
 - telemetry
 
 ---

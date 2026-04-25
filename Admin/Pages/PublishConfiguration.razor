@@ -90,9 +90,9 @@
         try
         {
             Memory? mem = await ee.Memory("configurations").ReadByIndexAsync(targetId!);
-            if (mem?.result == true)
+            if (HasRows(mem))
             {
-                var cfg = JsonSerializer.Deserialize<DesiredConfig>(mem.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var cfg = JsonSerializer.Deserialize<DesiredConfig>(mem!.area![0]!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (cfg is not null)
                 {
                     version = cfg.Version + 1; // suggerisci la prossima versione
@@ -111,6 +111,9 @@
 
         try
         {
+            if (string.IsNullOrWhiteSpace(targetId))
+                throw new Exception("Target ID is required.");
+
             var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json)
                        ?? throw new Exception("Invalid JSON.");
 
@@ -128,7 +131,7 @@
             }
             else
             {
-                await PublishToGroup(targetId!, cfg, dict);
+                await PublishToGroup(targetId!, cfg);
             }
         }
         catch (Exception ex)
@@ -147,15 +150,18 @@
         // controlla versione corrente per mostrare warning
         Memory? existing = await ee.Memory("configurations").ReadByIndexAsync(deviceId);
 
-        if (existing?.result == true)
+        if (HasRows(existing))
         {
-            var current = JsonSerializer.Deserialize<DesiredConfig>(existing.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var current = JsonSerializer.Deserialize<DesiredConfig>(existing!.area![0]!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (current is not null && cfg.Version <= current.Version)
             {
                 _versionWarning = true;
+                msg = $"Version must be greater than current version ({current.Version}).";
+                _msgClass = "alert-warning";
+                return;
             }
 
-            var result = await ee.Memory("configurations").UpdateAsync(existing.area[0].address, cfg);
+            var result = await ee.Memory("configurations").UpdateAsync(existing!.area![0]!.address, cfg);
             msg = result?.result == true ? $"Published v{cfg.Version} to device '{deviceId}'" : "Publish failed.";
             _msgClass = result?.result == true ? "alert-success" : "alert-danger";
         }
@@ -167,46 +173,33 @@
         }
     }
 
-    private async Task PublishToGroup(string group, DesiredConfig cfg, Dictionary<string, object> dict)
+    private async Task PublishToGroup(string group, DesiredConfig cfg)
     {
-        // Leggi tutti i device del gruppo
-        Memory? devMem = await ee.Memory("devices").ReadAllAsync();
-        if (devMem?.result != true)
+        Memory? existing = await ee.Memory("configurations").ReadByIndexAsync(group);
+
+        if (HasRows(existing))
         {
-            msg = "Could not load device list.";
-            _msgClass = "alert-danger";
-            return;
+            var current = JsonSerializer.Deserialize<DesiredConfig>(existing!.area![0]!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (current is not null && cfg.Version <= current.Version)
+            {
+                _versionWarning = true;
+                msg = $"Version must be greater than current group version ({current.Version}).";
+                _msgClass = "alert-warning";
+                return;
+            }
+
+            var result = await ee.Memory("configurations").UpdateAsync(existing!.area![0]!.address, cfg);
+            msg = result?.result == true ? $"Published v{cfg.Version} to group '{group}'" : "Publish failed.";
+            _msgClass = result?.result == true ? "alert-success" : "alert-danger";
         }
-
-        var groupDevices = devMem.area
-            .Select(a => JsonSerializer.Deserialize<Device>(a.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }))
-            .Where(d => d is not null && string.Equals(d.Group, group, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (groupDevices.Count == 0)
+        else
         {
-            msg = $"No devices found in group '{group}'.";
-            _msgClass = "alert-warning";
-            return;
+            var result = await ee.Memory("configurations").WriteAsync(Guid.NewGuid().ToString(), group, cfg);
+            msg = result?.result == true ? $"Published v{cfg.Version} to group '{group}'" : "Publish failed.";
+            _msgClass = result?.result == true ? "alert-success" : "alert-danger";
         }
-
-        int ok = 0, fail = 0;
-
-        foreach (var device in groupDevices)
-        {
-            var deviceCfg = cfg with { TargetType = "device", TargetId = device!.DeviceId };
-            Memory? existing = await ee.Memory("configurations").ReadByIndexAsync(device.DeviceId);
-
-            bool success;
-            if (existing?.result == true)
-                success = (await ee.Memory("configurations").UpdateAsync(existing.area[0].address, deviceCfg))?.result == true;
-            else
-                success = (await ee.Memory("configurations").WriteAsync(Guid.NewGuid().ToString(), device.DeviceId, deviceCfg))?.result == true;
-
-            if (success) ok++; else fail++;
-        }
-
-        msg = $"Published v{cfg.Version} to {ok}/{groupDevices.Count} devices in group '{group}'.";
-        _msgClass = fail == 0 ? "alert-success" : "alert-warning";
     }
+
+    private static bool HasRows(Memory? mem)
+        => mem?.result == true && mem.area is not null && mem.area.Any();
 }

@@ -3,9 +3,9 @@
 public class Device
 {
     public long id { get; set; }
-    public string DeviceId { get; set; }
-    public string Group { get; set; }
-    public string Name { get; set; }
+    public string DeviceId { get; set; } = "";
+    public string Group { get; set; } = "";
+    public string Name { get; set; } = "";
     public DateTime CreatedAtUtc { get; set; }
     public Dictionary<string, object>? Metadata { get; set; } = null;
 }

@@ -111,13 +111,17 @@ else
     protected override async Task OnParametersSetAsync()
     {
         _loading = true;
+        state = null;
         Memory? mem = await ee.Memory("states").ReadByIndexAsync(DeviceId);
 
-        if (mem?.result == true)
-            state = JsonSerializer.Deserialize<ReportedState>(mem.area[0].data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (HasRows(mem))
+            state = JsonSerializer.Deserialize<ReportedState>(mem!.area![0]!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
         _loading = false;
     }
+
+    private static bool HasRows(Memory? mem)
+        => mem?.result == true && mem.area is not null && mem.area.Any();
 
     private static string RelativeTime(DateTime utc)
     {

@@ -94,7 +94,7 @@ else if (_rows is not null && _rows.Count > 0)
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var t in _rows)
+                        @foreach (var t in _rows!)
                         {
                             <tr>
                                 <td style="white-space:nowrap;">@t.TimestampUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
@@ -144,11 +144,11 @@ else if (!string.IsNullOrWhiteSpace(_selectedDeviceId))
     {
         Memory? mem = await ee.Memory("devices").ReadAllAsync();
 
-        if (mem?.result == true)
+        if (HasRows(mem))
         {
-            foreach (var area in mem.area)
+            foreach (var area in mem!.area!)
             {
-                Device? device = JsonSerializer.Deserialize<Device>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                Device? device = JsonSerializer.Deserialize<Device>(area!.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
                 if (device == null)
                     continue;
@@ -195,18 +195,21 @@ else if (!string.IsNullOrWhiteSpace(_selectedDeviceId))
         {
             Memory? telemetryMem = await ee.Memory("telemetry").ReadAllAsync(_selectedDeviceId, Order.DESC, false, 0, _limit);
 
-            if (telemetryMem?.result == false)
+            if (telemetryMem is null || telemetryMem.result == false)
                 _error = "Error loading telemetry.";
             else
             {
                 var data = new List<TelemetryPoint>();
 
-                foreach (var area in telemetryMem.area)
+                if (telemetryMem.area is not null)
                 {
-                    TelemetryPoint? tp = JsonSerializer.Deserialize<TelemetryPoint>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    
-                    if (tp != null)
-                        data.Add(tp);
+                    foreach (var area in telemetryMem.area)
+                    {
+                        TelemetryPoint? tp = JsonSerializer.Deserialize<TelemetryPoint>(area.data, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                        if (tp != null)
+                            data.Add(tp);
+                    }
                 }
 
                 _rows = data;
@@ -296,4 +299,7 @@ else if (!string.IsNullOrWhiteSpace(_selectedDeviceId))
 
     private static bool TryGetDouble(Dictionary<string, object> metrics, string key, out double value)
         => MetricHelper.TryGetDouble(metrics, key, out value);
+
+    private static bool HasRows(Memory? mem)
+        => mem?.result == true && mem.area is not null && mem.area.Any();
 }
